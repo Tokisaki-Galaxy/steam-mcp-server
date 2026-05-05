@@ -12,7 +12,7 @@ export interface SteamMcpEnv {
 const MCP_VERSION = "1.0.0";
 const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-server";
 
-let steam!: SteamClient;
+let steam: SteamClient;
 let defaultSteamId: string | undefined;
 let initialization: Promise<void> | null = null;
 let initializationError: Error | null = null;
