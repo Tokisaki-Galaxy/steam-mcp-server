@@ -1604,7 +1604,7 @@ function resolveCorsOrigin(request: Request, env: SteamMcpEnv): string | null {
     .filter(Boolean);
 
   if (!origin) {
-    return allowList && allowList.length > 0 ? null : "*";
+    return "*";
   }
 
   if (!allowList || allowList.length === 0) {
@@ -1679,8 +1679,6 @@ async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
       initialization = null;
       throw error;
     });
-  } else if (env.STEAM_ID && !defaultSteamId) {
-    defaultSteamId = env.STEAM_ID;
   }
 
   await initialization;
