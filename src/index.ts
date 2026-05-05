@@ -1,19 +1,20 @@
-#!/usr/bin/env node
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { SteamClient } from "./steam-client.js";
 
-const apiKey = process.env.STEAM_API_KEY;
-const defaultSteamId = process.env.STEAM_ID;
-
-if (!apiKey) {
-  console.error("Error: STEAM_API_KEY environment variable is required");
-  process.exit(1);
+export interface SteamMcpEnv {
+  STEAM_API_KEY?: string;
+  STEAM_ID?: string;
 }
 
-const steam = new SteamClient({ apiKey });
+const MCP_VERSION = "1.0.0";
+const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-server";
+
+let steam!: SteamClient;
+let steamApiKey: string | undefined;
+let defaultSteamId: string | undefined;
+let serverReady: Promise<void> | null = null;
 
 // Security: Validate Steam ID format (17-digit numeric string for 64-bit Steam IDs)
 const STEAM_ID_REGEX = /^[0-9]{17}$/;
@@ -195,7 +196,7 @@ async function parallelMap<T, R>(
 
 const server = new McpServer({
   name: "steam-mcp-server",
-  version: "1.0.0",
+  version: MCP_VERSION,
 });
 
 // === Social Tools ===
@@ -1585,13 +1586,121 @@ server.tool(
   }
 );
 
-// Start server
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
+const transport = new WebStandardStreamableHTTPServerTransport({
+  sessionIdGenerator: () => crypto.randomUUID(),
+});
+
+const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+  "access-control-allow-headers":
+    "content-type,mcp-session-id,last-event-id,mcp-protocol-version,authorization",
+  "access-control-expose-headers": "mcp-session-id,mcp-protocol-version",
+};
+
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
-main().catch((error) => {
-  console.error("Server error:", error);
-  process.exit(1);
-});
+function createLandingPage() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Steam MCP Server</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { max-width: 720px; line-height: 1.6; }
+    a { color: inherit; }
+    .card { padding: 24px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 16px; }
+    .links { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+    code { padding: 2px 6px; border-radius: 6px; background: color-mix(in srgb, currentColor 10%, transparent); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Steam MCP Server</h1>
+    <p>This Worker serves Steam MCP over HTTP at <code>/mcp</code>.</p>
+    <p>Use the MCP endpoint in your client, or browse the source repository for setup details.</p>
+    <div class="links">
+      <a href="/mcp">Open MCP endpoint</a>
+      <a href="${GITHUB_REPOSITORY_URL}">GitHub repository</a>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function isMcpPath(pathname: string): boolean {
+  return pathname === "/mcp" || pathname.startsWith("/mcp/");
+}
+
+async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
+  const apiKey = env.STEAM_API_KEY;
+  if (!apiKey) {
+    throw new Error("STEAM_API_KEY environment variable is required");
+  }
+
+  if (!steamApiKey) {
+    steamApiKey = apiKey;
+    steam = new SteamClient({ apiKey });
+  } else if (steamApiKey !== apiKey) {
+    throw new Error("STEAM_API_KEY does not match the configured worker key");
+  }
+
+  if (env.STEAM_ID) {
+    defaultSteamId = env.STEAM_ID;
+  }
+
+  if (!serverReady) {
+    serverReady = server.connect(transport).catch((error) => {
+      serverReady = null;
+      throw error;
+    });
+  }
+  await serverReady;
+}
+
+export default {
+  async fetch(request: Request, env: SteamMcpEnv): Promise<Response> {
+    const { pathname } = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return withCors(new Response(null, { status: 204 }));
+    }
+
+    if (pathname === "/") {
+      return withCors(
+        new Response(createLandingPage(), {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
+        })
+      );
+    }
+
+    if (!isMcpPath(pathname)) {
+      return withCors(new Response("Not Found", { status: 404 }));
+    }
+
+    try {
+      await ensureServerReady(env);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Server not configured";
+      return withCors(new Response(message, { status: 500 }));
+    }
+
+    const response = await transport.handleRequest(request);
+    return withCors(response);
+  },
+};

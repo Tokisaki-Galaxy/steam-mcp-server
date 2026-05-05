@@ -20,108 +20,42 @@ npm install
 npm run build
 ```
 
-### 4. Configure Your MCP Client
+### 4. Run Locally (Cloudflare Worker)
 
-#### Claude Code
+Create a `.dev.vars` file for Wrangler:
 
-Add to your Claude Code settings file (`~/.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "node",
-      "args": ["/path/to/steam-mcp-server/dist/index.js"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
+```bash
+STEAM_API_KEY=your-api-key-here
+STEAM_ID=your-64-bit-steam-id
 ```
 
-Or use npx (no build required):
+Start the Worker:
 
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
+```bash
+npx wrangler dev
 ```
 
-#### Claude Desktop
+### 5. Deploy
 
-Add to your Claude Desktop configuration:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
+```bash
+npx wrangler secret put STEAM_API_KEY
+# Optional default Steam ID
+npx wrangler secret put STEAM_ID
+npx wrangler deploy
 ```
 
-#### Cursor
+### 6. Configure Your MCP Client
 
-Add to Cursor's MCP settings (`.cursor/mcp.json` in your project or global config):
+Use the HTTP MCP endpoint exposed by the Worker:
 
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
-```
-
-#### Windsurf
-
-Add to Windsurf's MCP configuration (`~/.windsurf/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
-```
+- Local dev: `http://127.0.0.1:8787/mcp`
+- Production: `https://<your-worker>.workers.dev/mcp`
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `STEAM_API_KEY` | Yes | Your Steam Web API key |
+| `STEAM_API_KEY` | Yes | Steam Web API key (Wrangler secret/var) |
 | `STEAM_ID` | No | Default Steam ID to use when not specified in tool calls |
 
 When `STEAM_ID` is set, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile automatically.

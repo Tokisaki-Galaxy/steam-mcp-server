@@ -1,21 +1,20 @@
 {
   "name": "steam-mcp-server",
   "version": "0.4.0",
-  "description": "MCP server for Steam Web API - access game library, achievements, and player data",
+  "description": "MCP server for Steam Web API over HTTP (Cloudflare Worker)",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "bin": {
-    "steam-mcp-server": "dist/index.js"
-  },
   "files": [
     "dist"
   ],
   "scripts": {
     "build": "tsc",
     "prepublishOnly": "npm run build",
-    "start": "node dist/index.js",
+    "start": "wrangler dev",
     "dev": "tsc --watch",
+    "dev:worker": "wrangler dev",
+    "deploy:worker": "wrangler deploy",
     "test": "vitest run",
     "test:watch": "vitest",
     "version:patch": "npm version patch -m \"chore(release): %s\"",
