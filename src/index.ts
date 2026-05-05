@@ -1,36 +1,20 @@
-#!/usr/bin/env node
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import { z } from "zod";
 import { SteamClient } from "./steam-client.js";
 
-const apiKey = process.env.STEAM_API_KEY;
-const defaultSteamId = process.env.STEAM_ID;
-
-if (!apiKey) {
-  console.error("Error: STEAM_API_KEY environment variable is required");
-  process.exit(1);
+export interface SteamMcpEnv {
+  STEAM_MCP_ALLOWED_ORIGINS?: string;
 }
 
-const steam = new SteamClient({ apiKey });
+const MCP_VERSION = "1.0.0";
+const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-server";
 
 // Security: Validate Steam ID format (17-digit numeric string for 64-bit Steam IDs)
 const STEAM_ID_REGEX = /^[0-9]{17}$/;
 
 function isValidSteamId(steamId: string): boolean {
   return STEAM_ID_REGEX.test(steamId);
-}
-
-function getSteamId(providedId?: string): string {
-  const steamId = providedId || defaultSteamId;
-  if (!steamId) {
-    throw new Error("No Steam ID provided and STEAM_ID environment variable not set");
-  }
-  if (!isValidSteamId(steamId)) {
-    throw new Error("Invalid Steam ID format. Must be a 17-digit numeric string.");
-  }
-  return steamId;
 }
 
 // Security: Validate vanity URL format (alphanumeric, underscores, hyphens only)
@@ -120,7 +104,7 @@ const steamIdSchema = z
   .string()
   .regex(STEAM_ID_REGEX, "Must be a 17-digit Steam ID")
   .optional()
-  .describe("64-bit Steam ID (optional if STEAM_ID env var is set)");
+  .describe("64-bit Steam ID (optional if X_STEAM_ID header is set)");
 
 // Helper to convert persona state to readable string
 function getPersonaState(state: number): string {
@@ -151,12 +135,14 @@ interface AppListCache {
 let appListCache: AppListCache | null = null;
 const APP_LIST_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-async function getCachedAppList(): Promise<Array<{ appid: number; name: string }>> {
+async function getCachedAppList(
+  steamClient: SteamClient
+): Promise<Array<{ appid: number; name: string }>> {
   const now = Date.now();
   if (appListCache && (now - appListCache.timestamp) < APP_LIST_CACHE_TTL) {
     return appListCache.apps;
   }
-  const apps = await steam.getAppList();
+  const apps = await steamClient.getAppList();
   appListCache = { apps, timestamp: now };
   return apps;
 }
@@ -193,12 +179,19 @@ async function parallelMap<T, R>(
   return results;
 }
 
-const server = new McpServer({
-  name: "steam-mcp-server",
-  version: "1.0.0",
-});
+function registerTools(server: McpServer, steam: SteamClient, defaultSteamId?: string) {
+  function getSteamId(providedId?: string): string {
+    const steamId = providedId || defaultSteamId;
+    if (!steamId) {
+      throw new Error("No Steam ID provided and X_STEAM_ID header not set");
+    }
+    if (!isValidSteamId(steamId)) {
+      throw new Error("Invalid Steam ID format. Must be a 17-digit numeric string.");
+    }
+    return steamId;
+  }
 
-// === Social Tools ===
+  // === Social Tools ===
 
 server.tool(
   "get_player_summary",
@@ -1098,7 +1091,7 @@ server.tool(
   async ({ query, limit }) => {
     try {
       // Security: Use cached app list to prevent repeated large API calls
-      const allApps = await getCachedAppList();
+      const allApps = await getCachedAppList(steam);
       const queryLower = query.toLowerCase();
       const matches = allApps
         .filter((app) => app.name.toLowerCase().includes(queryLower))
@@ -1584,14 +1577,146 @@ server.tool(
     }
   }
 );
-
-// Start server
-async function main() {
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
 }
 
-main().catch((error) => {
-  console.error("Server error:", error);
-  process.exit(1);
-});
+function createServer(apiKey: string, defaultSteamId?: string): McpServer {
+  const steam = new SteamClient({ apiKey });
+  const server = new McpServer({
+    name: "steam-mcp-server",
+    version: MCP_VERSION,
+  });
+  registerTools(server, steam, defaultSteamId);
+  return server;
+}
+
+const BASE_CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
+  "access-control-allow-headers":
+    "content-type,mcp-session-id,last-event-id,mcp-protocol-version,authorization,x_steam_api_key,x_steam_id,x-steam-api-key,x-steam-id",
+  "access-control-expose-headers": "mcp-session-id,mcp-protocol-version",
+};
+
+function resolveCorsOrigin(request: Request, env: SteamMcpEnv): string | null {
+  const origin = request.headers.get("origin");
+  const allowList = env.STEAM_MCP_ALLOWED_ORIGINS?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!origin || !allowList || allowList.length === 0) {
+    return null;
+  }
+
+  return allowList.includes(origin) ? origin : null;
+}
+
+function withCors(response: Response, request: Request, env: SteamMcpEnv): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of Object.entries(BASE_CORS_HEADERS)) {
+    headers.set(key, value);
+  }
+  const allowOrigin = resolveCorsOrigin(request, env);
+  if (allowOrigin) {
+    headers.set("access-control-allow-origin", allowOrigin);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function createLandingPage() {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Steam MCP Server</title>
+  <style>
+    :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    main { max-width: 720px; line-height: 1.6; }
+    a { color: inherit; }
+    .card { padding: 24px; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 16px; }
+    .links { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+    code { padding: 2px 6px; border-radius: 6px; background: color-mix(in srgb, currentColor 10%, transparent); }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1>Steam MCP Server</h1>
+    <p>This Worker serves Steam MCP over HTTP at <code>/mcp</code>.</p>
+    <p>Use the MCP endpoint in your client, or browse the source repository for setup details.</p>
+    <div class="links">
+      <a href="/mcp">Open MCP endpoint</a>
+      <a href="${GITHUB_REPOSITORY_URL}">GitHub repository</a>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
+function isMcpPath(pathname: string): boolean {
+  return pathname === "/mcp" || pathname.startsWith("/mcp/");
+}
+
+function readHeader(request: Request, names: string[]): string | undefined {
+  for (const name of names) {
+    const value = request.headers.get(name);
+    if (value) {
+      const trimmed = value.trim();
+      if (trimmed) {
+        return trimmed;
+      }
+    }
+  }
+  return undefined;
+}
+
+export default {
+  async fetch(request: Request, env: SteamMcpEnv): Promise<Response> {
+    const { pathname } = new URL(request.url);
+
+    if (request.method === "OPTIONS") {
+      return withCors(new Response(null, { status: 204 }), request, env);
+    }
+
+    if (pathname === "/") {
+      return withCors(
+        new Response(createLandingPage(), {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
+        }),
+        request,
+        env
+      );
+    }
+
+    if (!isMcpPath(pathname)) {
+      return withCors(new Response("Not Found", { status: 404 }), request, env);
+    }
+
+    const apiKey = readHeader(request, ["X_STEAM_API_KEY", "X-STEAM-API-KEY"]);
+    if (!apiKey) {
+      return withCors(new Response("Missing X_STEAM_API_KEY header", { status: 400 }), request, env);
+    }
+
+    const headerSteamId = readHeader(request, ["X_STEAM_ID", "X-STEAM-ID"]);
+    if (headerSteamId && !isValidSteamId(headerSteamId)) {
+      return withCors(
+        new Response("Invalid X_STEAM_ID header. Must be a 17-digit Steam ID.", {
+          status: 400,
+        }),
+        request,
+        env
+      );
+    }
+
+    const server = createServer(apiKey, headerSteamId);
+    const transport = new WebStandardStreamableHTTPServerTransport();
+    await server.connect(transport);
+    const response = await transport.handleRequest(request);
+    return withCors(response, request, env);
+  },
+};

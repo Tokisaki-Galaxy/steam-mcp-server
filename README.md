@@ -20,111 +20,41 @@ npm install
 npm run build
 ```
 
-### 4. Configure Your MCP Client
+### 4. Run Locally (Cloudflare Worker)
 
-#### Claude Code
+Start the Worker:
 
-Add to your Claude Code settings file (`~/.claude/settings.json`):
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "node",
-      "args": ["/path/to/steam-mcp-server/dist/index.js"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
+```bash
+npx wrangler dev
 ```
 
-Or use npx (no build required):
+Send MCP requests with these headers:
 
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
+- `X_STEAM_API_KEY` (or `X-STEAM-API-KEY`): Steam Web API key (required)
+- `X_STEAM_ID` (or `X-STEAM-ID`): default Steam ID (optional)
+
+### 5. Deploy
+
+```bash
+npx wrangler deploy
 ```
 
-#### Claude Desktop
+### 6. Configure Your MCP Client
 
-Add to your Claude Desktop configuration:
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+Use the HTTP MCP endpoint exposed by the Worker and attach the headers above:
 
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
-```
-
-#### Cursor
-
-Add to Cursor's MCP settings (`.cursor/mcp.json` in your project or global config):
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
-```
-
-#### Windsurf
-
-Add to Windsurf's MCP configuration (`~/.windsurf/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "steam": {
-      "command": "npx",
-      "args": ["-y", "steam-mcp-server"],
-      "env": {
-        "STEAM_API_KEY": "your-api-key-here",
-        "STEAM_ID": "your-64-bit-steam-id"
-      }
-    }
-  }
-}
-```
+- Local dev: `http://127.0.0.1:8787/mcp`
+- Production: `https://<your-worker>.workers.dev/mcp`
 
 ## Environment Variables
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `STEAM_API_KEY` | Yes | Your Steam Web API key |
-| `STEAM_ID` | No | Default Steam ID to use when not specified in tool calls |
+| `STEAM_MCP_ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins |
 
-When `STEAM_ID` is set, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile automatically.
+When `X_STEAM_ID` is provided, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile for that request.
+
+When `STEAM_MCP_ALLOWED_ORIGINS` is set, CORS headers are only returned for matching origins. If it is not set, no CORS headers are sent.
 
 ## Available Tools
 
