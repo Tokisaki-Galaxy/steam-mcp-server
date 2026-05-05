@@ -57,8 +57,11 @@ Use the HTTP MCP endpoint exposed by the Worker:
 |----------|----------|-------------|
 | `STEAM_API_KEY` | Yes | Steam Web API key (Wrangler secret/var) |
 | `STEAM_ID` | No | Default Steam ID to use when not specified in tool calls |
+| `STEAM_MCP_ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins |
 
 When `STEAM_ID` is set, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile automatically.
+
+When `STEAM_MCP_ALLOWED_ORIGINS` is set, CORS headers are only returned for matching origins.
 
 ## Available Tools
 

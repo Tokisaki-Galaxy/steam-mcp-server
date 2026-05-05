@@ -6,15 +6,15 @@ import { SteamClient } from "./steam-client.js";
 export interface SteamMcpEnv {
   STEAM_API_KEY?: string;
   STEAM_ID?: string;
+  STEAM_MCP_ALLOWED_ORIGINS?: string;
 }
 
 const MCP_VERSION = "1.0.0";
 const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-server";
 
 let steam!: SteamClient;
-let steamApiKey: string | undefined;
 let defaultSteamId: string | undefined;
-let serverReady: Promise<void> | null = null;
+let initialization: Promise<void> | null = null;
 
 // Security: Validate Steam ID format (17-digit numeric string for 64-bit Steam IDs)
 const STEAM_ID_REGEX = /^[0-9]{17}$/;
@@ -1590,18 +1590,38 @@ const transport = new WebStandardStreamableHTTPServerTransport({
   sessionIdGenerator: () => crypto.randomUUID(),
 });
 
-const CORS_HEADERS: Record<string, string> = {
-  "access-control-allow-origin": "*",
+const BASE_CORS_HEADERS: Record<string, string> = {
   "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
   "access-control-allow-headers":
     "content-type,mcp-session-id,last-event-id,mcp-protocol-version,authorization",
   "access-control-expose-headers": "mcp-session-id,mcp-protocol-version",
 };
 
-function withCors(response: Response): Response {
+function resolveCorsOrigin(request: Request, env: SteamMcpEnv): string | null {
+  const origin = request.headers.get("origin");
+  const allowList = env.STEAM_MCP_ALLOWED_ORIGINS?.split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  if (!origin) {
+    return allowList && allowList.length > 0 ? null : "*";
+  }
+
+  if (!allowList || allowList.length === 0) {
+    return "*";
+  }
+
+  return allowList.includes(origin) ? origin : null;
+}
+
+function withCors(response: Response, request: Request, env: SteamMcpEnv): Response {
   const headers = new Headers(response.headers);
-  for (const [key, value] of Object.entries(CORS_HEADERS)) {
+  for (const [key, value] of Object.entries(BASE_CORS_HEADERS)) {
     headers.set(key, value);
+  }
+  const allowOrigin = resolveCorsOrigin(request, env);
+  if (allowOrigin) {
+    headers.set("access-control-allow-origin", allowOrigin);
   }
   return new Response(response.body, {
     status: response.status,
@@ -1646,29 +1666,24 @@ function isMcpPath(pathname: string): boolean {
 }
 
 async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
-  const apiKey = env.STEAM_API_KEY;
-  if (!apiKey) {
-    throw new Error("STEAM_API_KEY environment variable is required");
-  }
-
-  if (!steamApiKey) {
-    steamApiKey = apiKey;
-    steam = new SteamClient({ apiKey });
-  } else if (steamApiKey !== apiKey) {
-    throw new Error("STEAM_API_KEY does not match the configured worker key");
-  }
-
-  if (env.STEAM_ID) {
+  if (!initialization) {
+    initialization = (async () => {
+      const apiKey = env.STEAM_API_KEY;
+      if (!apiKey) {
+        throw new Error("STEAM_API_KEY environment variable is required");
+      }
+      steam = new SteamClient({ apiKey });
+      defaultSteamId = env.STEAM_ID;
+      await server.connect(transport);
+    })().catch((error) => {
+      initialization = null;
+      throw error;
+    });
+  } else if (env.STEAM_ID && !defaultSteamId) {
     defaultSteamId = env.STEAM_ID;
   }
 
-  if (!serverReady) {
-    serverReady = server.connect(transport).catch((error) => {
-      serverReady = null;
-      throw error;
-    });
-  }
-  await serverReady;
+  await initialization;
 }
 
 export default {
@@ -1676,7 +1691,7 @@ export default {
     const { pathname } = new URL(request.url);
 
     if (request.method === "OPTIONS") {
-      return withCors(new Response(null, { status: 204 }));
+      return withCors(new Response(null, { status: 204 }), request, env);
     }
 
     if (pathname === "/") {
@@ -1685,22 +1700,24 @@ export default {
           headers: {
             "content-type": "text/html; charset=utf-8",
           },
-        })
+        }),
+        request,
+        env
       );
     }
 
     if (!isMcpPath(pathname)) {
-      return withCors(new Response("Not Found", { status: 404 }));
+      return withCors(new Response("Not Found", { status: 404 }), request, env);
     }
 
     try {
       await ensureServerReady(env);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Server not configured";
-      return withCors(new Response(message, { status: 500 }));
+      return withCors(new Response(message, { status: 500 }), request, env);
     }
 
     const response = await transport.handleRequest(request);
-    return withCors(response);
+    return withCors(response, request, env);
   },
 };
