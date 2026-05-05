@@ -22,31 +22,26 @@ npm run build
 
 ### 4. Run Locally (Cloudflare Worker)
 
-Create a `.dev.vars` file for Wrangler:
-
-```bash
-STEAM_API_KEY=your-api-key-here
-STEAM_ID=your-64-bit-steam-id
-```
-
 Start the Worker:
 
 ```bash
 npx wrangler dev
 ```
 
+Send MCP requests with these headers:
+
+- `X_STEAM_API_KEY`: Steam Web API key (required)
+- `X_STEAM_ID`: default Steam ID (optional)
+
 ### 5. Deploy
 
 ```bash
-npx wrangler secret put STEAM_API_KEY
-# Optional default Steam ID
-npx wrangler secret put STEAM_ID
 npx wrangler deploy
 ```
 
 ### 6. Configure Your MCP Client
 
-Use the HTTP MCP endpoint exposed by the Worker:
+Use the HTTP MCP endpoint exposed by the Worker and attach the headers above:
 
 - Local dev: `http://127.0.0.1:8787/mcp`
 - Production: `https://<your-worker>.workers.dev/mcp`
@@ -55,11 +50,9 @@ Use the HTTP MCP endpoint exposed by the Worker:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `STEAM_API_KEY` | Yes | Steam Web API key (Wrangler secret/var) |
-| `STEAM_ID` | No | Default Steam ID to use when not specified in tool calls |
 | `STEAM_MCP_ALLOWED_ORIGINS` | No | Comma-separated list of allowed CORS origins |
 
-When `STEAM_ID` is set, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile automatically.
+When `X_STEAM_ID` is provided, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile for that request.
 
 When `STEAM_MCP_ALLOWED_ORIGINS` is set, CORS headers are only returned for matching origins. If it is not set, no CORS headers are sent.
 

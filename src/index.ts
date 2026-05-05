@@ -4,35 +4,17 @@ import { z } from "zod";
 import { SteamClient } from "./steam-client.js";
 
 export interface SteamMcpEnv {
-  STEAM_API_KEY?: string;
-  STEAM_ID?: string;
   STEAM_MCP_ALLOWED_ORIGINS?: string;
 }
 
 const MCP_VERSION = "1.0.0";
 const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-server";
 
-let steam: SteamClient;
-let defaultSteamId: string | undefined;
-let initialization: Promise<void> | null = null;
-let initializationError: Error | null = null;
-
 // Security: Validate Steam ID format (17-digit numeric string for 64-bit Steam IDs)
 const STEAM_ID_REGEX = /^[0-9]{17}$/;
 
 function isValidSteamId(steamId: string): boolean {
   return STEAM_ID_REGEX.test(steamId);
-}
-
-function getSteamId(providedId?: string): string {
-  const steamId = providedId || defaultSteamId;
-  if (!steamId) {
-    throw new Error("No Steam ID provided and STEAM_ID environment variable not set");
-  }
-  if (!isValidSteamId(steamId)) {
-    throw new Error("Invalid Steam ID format. Must be a 17-digit numeric string.");
-  }
-  return steamId;
 }
 
 // Security: Validate vanity URL format (alphanumeric, underscores, hyphens only)
@@ -122,7 +104,7 @@ const steamIdSchema = z
   .string()
   .regex(STEAM_ID_REGEX, "Must be a 17-digit Steam ID")
   .optional()
-  .describe("64-bit Steam ID (optional if STEAM_ID env var is set)");
+  .describe("64-bit Steam ID (optional if X_STEAM_ID header is set)");
 
 // Helper to convert persona state to readable string
 function getPersonaState(state: number): string {
@@ -153,12 +135,14 @@ interface AppListCache {
 let appListCache: AppListCache | null = null;
 const APP_LIST_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-async function getCachedAppList(): Promise<Array<{ appid: number; name: string }>> {
+async function getCachedAppList(
+  steamClient: SteamClient
+): Promise<Array<{ appid: number; name: string }>> {
   const now = Date.now();
   if (appListCache && (now - appListCache.timestamp) < APP_LIST_CACHE_TTL) {
     return appListCache.apps;
   }
-  const apps = await steam.getAppList();
+  const apps = await steamClient.getAppList();
   appListCache = { apps, timestamp: now };
   return apps;
 }
@@ -195,12 +179,19 @@ async function parallelMap<T, R>(
   return results;
 }
 
-const server = new McpServer({
-  name: "steam-mcp-server",
-  version: MCP_VERSION,
-});
+function registerTools(server: McpServer, steam: SteamClient, defaultSteamId?: string) {
+  function getSteamId(providedId?: string): string {
+    const steamId = providedId || defaultSteamId;
+    if (!steamId) {
+      throw new Error("No Steam ID provided and X_STEAM_ID header not set");
+    }
+    if (!isValidSteamId(steamId)) {
+      throw new Error("Invalid Steam ID format. Must be a 17-digit numeric string.");
+    }
+    return steamId;
+  }
 
-// === Social Tools ===
+  // === Social Tools ===
 
 server.tool(
   "get_player_summary",
@@ -1100,7 +1091,7 @@ server.tool(
   async ({ query, limit }) => {
     try {
       // Security: Use cached app list to prevent repeated large API calls
-      const allApps = await getCachedAppList();
+      const allApps = await getCachedAppList(steam);
       const queryLower = query.toLowerCase();
       const matches = allApps
         .filter((app) => app.name.toLowerCase().includes(queryLower))
@@ -1586,10 +1577,17 @@ server.tool(
     }
   }
 );
+}
 
-const transport = new WebStandardStreamableHTTPServerTransport({
-  sessionIdGenerator: () => crypto.randomUUID(),
-});
+function createServer(apiKey: string, defaultSteamId?: string): McpServer {
+  const steam = new SteamClient({ apiKey });
+  const server = new McpServer({
+    name: "steam-mcp-server",
+    version: MCP_VERSION,
+  });
+  registerTools(server, steam, defaultSteamId);
+  return server;
+}
 
 const BASE_CORS_HEADERS: Record<string, string> = {
   "access-control-allow-methods": "GET,POST,DELETE,OPTIONS",
@@ -1662,29 +1660,6 @@ function isMcpPath(pathname: string): boolean {
   return pathname === "/mcp" || pathname.startsWith("/mcp/");
 }
 
-async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
-  if (initializationError) {
-    throw initializationError;
-  }
-
-  if (!initialization) {
-    initialization = (async () => {
-      const apiKey = env.STEAM_API_KEY;
-      if (!apiKey) {
-        throw new Error("STEAM_API_KEY environment variable is required");
-      }
-      steam = new SteamClient({ apiKey });
-      defaultSteamId = env.STEAM_ID;
-      await server.connect(transport);
-    })().catch((error) => {
-      initializationError = error instanceof Error ? error : new Error("Initialization failed");
-      throw error;
-    });
-  }
-
-  await initialization;
-}
-
 export default {
   async fetch(request: Request, env: SteamMcpEnv): Promise<Response> {
     const { pathname } = new URL(request.url);
@@ -1709,13 +1684,25 @@ export default {
       return withCors(new Response("Not Found", { status: 404 }), request, env);
     }
 
-    try {
-      await ensureServerReady(env);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Server not configured";
-      return withCors(new Response(message, { status: 500 }), request, env);
+    const apiKey = request.headers.get("X_STEAM_API_KEY")?.trim();
+    if (!apiKey) {
+      return withCors(new Response("Missing X_STEAM_API_KEY header", { status: 400 }), request, env);
     }
 
+    const headerSteamId = request.headers.get("X_STEAM_ID")?.trim() || undefined;
+    if (headerSteamId && !isValidSteamId(headerSteamId)) {
+      return withCors(
+        new Response("Invalid X_STEAM_ID header. Must be a 17-digit Steam ID.", {
+          status: 400,
+        }),
+        request,
+        env
+      );
+    }
+
+    const server = createServer(apiKey, headerSteamId);
+    const transport = new WebStandardStreamableHTTPServerTransport();
+    await server.connect(transport);
     const response = await transport.handleRequest(request);
     return withCors(response, request, env);
   },
