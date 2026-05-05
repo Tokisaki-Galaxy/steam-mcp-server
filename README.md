@@ -61,7 +61,7 @@ Use the HTTP MCP endpoint exposed by the Worker:
 
 When `STEAM_ID` is set, you can call tools like `get_owned_games` without passing a Steam ID - it will use your default profile automatically.
 
-When `STEAM_MCP_ALLOWED_ORIGINS` is set, CORS headers are only returned for matching origins.
+When `STEAM_MCP_ALLOWED_ORIGINS` is set, CORS headers are only returned for matching origins. If it is not set, no CORS headers are sent.
 
 ## Available Tools
 

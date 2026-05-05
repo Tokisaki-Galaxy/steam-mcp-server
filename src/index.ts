@@ -15,6 +15,7 @@ const GITHUB_REPOSITORY_URL = "https://github.com/Tokisaki-Galaxy/steam-mcp-serv
 let steam!: SteamClient;
 let defaultSteamId: string | undefined;
 let initialization: Promise<void> | null = null;
+let initializationError: Error | null = null;
 
 // Security: Validate Steam ID format (17-digit numeric string for 64-bit Steam IDs)
 const STEAM_ID_REGEX = /^[0-9]{17}$/;
@@ -1603,12 +1604,8 @@ function resolveCorsOrigin(request: Request, env: SteamMcpEnv): string | null {
     .map((value) => value.trim())
     .filter(Boolean);
 
-  if (!origin) {
-    return "*";
-  }
-
-  if (!allowList || allowList.length === 0) {
-    return "*";
+  if (!origin || !allowList || allowList.length === 0) {
+    return null;
   }
 
   return allowList.includes(origin) ? origin : null;
@@ -1666,6 +1663,10 @@ function isMcpPath(pathname: string): boolean {
 }
 
 async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
+  if (initializationError) {
+    throw initializationError;
+  }
+
   if (!initialization) {
     initialization = (async () => {
       const apiKey = env.STEAM_API_KEY;
@@ -1676,7 +1677,7 @@ async function ensureServerReady(env: SteamMcpEnv): Promise<void> {
       defaultSteamId = env.STEAM_ID;
       await server.connect(transport);
     })().catch((error) => {
-      initialization = null;
+      initializationError = error instanceof Error ? error : new Error("Initialization failed");
       throw error;
     });
   }
