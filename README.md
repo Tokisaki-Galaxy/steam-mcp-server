@@ -30,8 +30,8 @@ npx wrangler dev
 
 Send MCP requests with these headers:
 
-- `X_STEAM_API_KEY`: Steam Web API key (required)
-- `X_STEAM_ID`: default Steam ID (optional)
+- `X_STEAM_API_KEY` (or `X-STEAM-API-KEY`): Steam Web API key (required)
+- `X_STEAM_ID` (or `X-STEAM-ID`): default Steam ID (optional)
 
 ### 5. Deploy
 
